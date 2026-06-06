@@ -50,7 +50,7 @@ def one_hot(y, classes):
 # ---------------------------------------------------------------------------
 
 def cross_entropy_loss(model, X, targets, alpha=0.0):
-    logits = model(Value(X))
+    logits = model(Value(X, requires_grad=False))
     loss, probs = logits.softmax_ce(targets)
     if alpha:
         loss = loss + alpha * sum((p * p).sum() for p in model.parameters())
@@ -73,7 +73,7 @@ def svm_loss(model, X, y, alpha=1e-4):
         loss:     scalar Value suitable for loss.backward().
         accuracy: float in [0, 1].
     """
-    scores = model(Value(X))
+    scores = model(Value(X, requires_grad=False))
     margins = (1 + scores * (-y)).relu()
     data_loss = margins.mean()
     reg_loss = alpha * sum((p * p).sum() for p in model.parameters())

@@ -13,7 +13,7 @@ import numpy as np
 
 def _as_array(data):
     """Convert numbers/lists/arrays to a float ndarray."""
-    return np.array(data, dtype=float)
+    return np.asarray(data, dtype=float)
 
 def _unbroadcast(grad: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
     """Sum a broadcasted gradient back down to the original operand shape.
@@ -44,36 +44,42 @@ class Value:
 
     __array_priority__ = 1000
 
-    def __init__(self, data, _children=(), _op: str = ""):
+    def __init__(self, data, _children=(), _op: str = "", requires_grad: bool = True):
         self.data = _as_array(data)
-        self.grad = np.zeros_like(self.data, dtype=float)
+        self.requires_grad = requires_grad
+        self.grad = np.zeros_like(self.data, dtype=float) if requires_grad else None
 
         # Internal variables used for autograd graph construction.
         self._backward = lambda: None
-        self._prev = set(_children)
+        self._prev = set(v for v in _children if getattr(v, "requires_grad", True))
         self._op = _op
 
     def zero_grad(self):
-        self.grad = np.zeros_like(self.data, dtype=float)
+        if self.requires_grad:
+            self.grad = np.zeros_like(self.data, dtype=float)
 
     def __add__(self, other):
         other = other if isinstance(other, Value) else Value(other)
-        out = Value(self.data + other.data, (self, other), "+")
+        out = Value(self.data + other.data, (self, other), "+", self.requires_grad or other.requires_grad)
 
         def _backward():
-            self.grad += _unbroadcast(out.grad, self.data.shape)
-            other.grad += _unbroadcast(out.grad, other.data.shape)
+            if self.requires_grad:
+                self.grad += _unbroadcast(out.grad, self.data.shape)
+            if other.requires_grad:
+                other.grad += _unbroadcast(out.grad, other.data.shape)
 
         out._backward = _backward
         return out
 
     def __mul__(self, other):
         other = other if isinstance(other, Value) else Value(other)
-        out = Value(self.data * other.data, (self, other), "*")
+        out = Value(self.data * other.data, (self, other), "*", self.requires_grad or other.requires_grad)
 
         def _backward():
-            self.grad += _unbroadcast(other.data * out.grad, self.data.shape)
-            other.grad += _unbroadcast(self.data * out.grad, other.data.shape)
+            if self.requires_grad:
+                self.grad += _unbroadcast(other.data * out.grad, self.data.shape)
+            if other.requires_grad:
+                other.grad += _unbroadcast(self.data * out.grad, other.data.shape)
 
         out._backward = _backward
         return out
@@ -141,24 +147,32 @@ class Value:
     # This is enough to build MLP layers efficiently.
     def __matmul__(self, other):
         other = other if isinstance(other, Value) else Value(other)
-        out = Value(self.data @ other.data, (self, other), "@")
+        out = Value(self.data @ other.data, (self, other), "@", self.requires_grad or other.requires_grad)
 
         def _backward():
             # Common dense-layer case: (batch, in) @ (in, out).
             if self.data.ndim == 2 and other.data.ndim == 2:
-                self.grad += out.grad @ other.data.T
-                other.grad += self.data.T @ out.grad
+                if self.requires_grad:
+                    self.grad += out.grad @ other.data.T
+                if other.requires_grad:
+                    other.grad += self.data.T @ out.grad
             # Convenience cases for vectors. They are less important for MLPs,
             # but make the operator usable in small experiments.
             elif self.data.ndim == 1 and other.data.ndim == 2:
-                self.grad += out.grad @ other.data.T
-                other.grad += np.outer(self.data, out.grad)
+                if self.requires_grad:
+                    self.grad += out.grad @ other.data.T
+                if other.requires_grad:
+                    other.grad += np.outer(self.data, out.grad)
             elif self.data.ndim == 2 and other.data.ndim == 1:
-                self.grad += np.outer(out.grad, other.data)
-                other.grad += self.data.T @ out.grad
+                if self.requires_grad:
+                    self.grad += np.outer(out.grad, other.data)
+                if other.requires_grad:
+                    other.grad += self.data.T @ out.grad
             elif self.data.ndim == 1 and other.data.ndim == 1:
-                self.grad += other.data * out.grad
-                other.grad += self.data * out.grad
+                if self.requires_grad:
+                    self.grad += other.data * out.grad
+                if other.requires_grad:
+                    other.grad += self.data * out.grad
             else:
                 raise NotImplementedError(
                     "matmul backward currently supports only 1D/2D operands; "
@@ -170,29 +184,32 @@ class Value:
 
     def __pow__(self, other):
         assert isinstance(other, (int, float)), "only supporting int/float powers for now"
-        out = Value(self.data**other, (self,), f"**{other}")
+        out = Value(self.data**other, (self,), f"**{other}", self.requires_grad)
 
         def _backward():
-            self.grad += other * (self.data ** (other - 1)) * out.grad
+            if self.requires_grad:
+                self.grad += other * (self.data ** (other - 1)) * out.grad
 
         out._backward = _backward
         return out
 
     def relu(self):
-        out = Value(np.maximum(self.data, 0), (self,), "ReLU")
+        out = Value(np.maximum(self.data, 0), (self,), "ReLU", self.requires_grad)
 
         def _backward():
-            self.grad += (self.data > 0) * out.grad
+            if self.requires_grad:
+                self.grad += (self.data > 0) * out.grad
 
         out._backward = _backward
         return out
 
     def tanh(self):
         t = np.tanh(self.data)
-        out = Value(t, (self,), "tanh")
+        out = Value(t, (self,), "tanh", self.requires_grad)
 
         def _backward():
-            self.grad += (1 - t**2) * out.grad
+            if self.requires_grad:
+                self.grad += (1 - t**2) * out.grad
 
         out._backward = _backward
         return out
@@ -211,41 +228,45 @@ class Value:
 
         n = targets.shape[0]
         loss = -(np.log(probs.clip(1e-7)) * targets).sum() / n
-        out = Value(loss, (self,), "softmax_ce")
+        out = Value(loss, (self,), "softmax_ce", self.requires_grad)
 
         def _backward():
-            self.grad += ((probs - targets) / n) * out.grad
+            if self.requires_grad:
+                self.grad += ((probs - targets) / n) * out.grad
 
         out._backward = _backward
         return out, probs
 
     def exp(self):
         e = np.exp(self.data)
-        out = Value(e, (self,), "exp")
+        out = Value(e, (self,), "exp", self.requires_grad)
 
         def _backward():
-            self.grad += e * out.grad
+            if self.requires_grad:
+                self.grad += e * out.grad
 
         out._backward = _backward
         return out
 
     def log(self):
-        out = Value(np.log(self.data), (self,), "log")
+        out = Value(np.log(self.data), (self,), "log", self.requires_grad)
 
         def _backward():
-            self.grad += (1 / self.data) * out.grad
+            if self.requires_grad:
+                self.grad += (1 / self.data) * out.grad
 
         out._backward = _backward
         return out
 
     def sum(self, axis=None, keepdims: bool = False):
-        out = Value(self.data.sum(axis=axis, keepdims=keepdims), (self,), "sum")
+        out = Value(self.data.sum(axis=axis, keepdims=keepdims), (self,), "sum", self.requires_grad)
 
         def _backward():
             grad = out.grad
             if axis is not None and not keepdims:
                 grad = np.expand_dims(grad, axis)
-            self.grad += np.ones_like(self.data) * grad
+            if self.requires_grad:
+                self.grad += np.ones_like(self.data) * grad
             
         out._backward = _backward
         return out
@@ -308,6 +329,6 @@ class Value:
     def __repr__(self):
         if self.data.shape == ():
             data = self.data.item()
-            grad = self.grad.item()
+            grad = None if self.grad is None else self.grad.item()
             return f"Value(data={data}, grad={grad})"
         return f"Value(shape={self.data.shape}, data={self.data}, grad={self.grad})"
