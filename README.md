@@ -1,6 +1,6 @@
 # vect-micrograd-plus
 
-Stress test of vect_mircograd [vect_micrograd](https://github.com/pvilanova/vect_micrograd).
+Stress test of [vect_micrograd](https://github.com/pvilanova/vect_micrograd).
 
 This is an educational project.
 
