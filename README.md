@@ -9,7 +9,7 @@ This is an educational project.
 These are the recorded results saved in the executed notebooks inspected for this README.
 
 | Demo | Dataset / split | Model | Training setup | Best checkpoint | Test result | 
-|---|---:|---|---|---:|---:|---|
+|---|---:|---|---|---:|---:|
 | `fer2013_demo_ema.ipynb` | 28,709 train images, 2,868 validation images, 7,178 test images | `2304 -> 512 -> 256 -> 7` ReLU MLP | Adam, mixed natural/balanced mini-batches, light augmentation, EMA checkpoint evaluation | step 3450, validation accuracy 47.98%, validation loss 1.5180 | **47.44%** test accuracy, 3,405 / 7,178 correct |
 | `cifar10_demo_ema.ipynb` | 50,000 train images, 5,000 validation images, 10,000 test images | `3072 -> 768 -> 384 -> 10` ReLU MLP | Adam, per-pixel standardization, horizontal flip + random crop, EMA checkpoint evaluation | step 3999, validation accuracy 59.26%, validation loss 1.1990 | **58.20%** test accuracy, 5,820 / 10,000 correct |
 
